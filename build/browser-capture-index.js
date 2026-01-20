@@ -84,56 +84,58 @@ async function launchBrowserWithCapture() {
                 }
             }
         });
-        // Console to capture user interactions via page evaluate
-        await page.exposeFunction('recordClick', (selector, text) => {
-            recordInteraction("Clicked on \"" + text + "\" (" + selector + ")");
+        // Track input fields being filled using polling
+        const trackedInputs = new Map();
+        setInterval(async () => {
+            if (!page)
+                return;
+            try {
+                const inputs = await page.evaluate(() => {
+                    const allInputs = [];
+                    const elements = document.querySelectorAll('input[type="text"], input[type="search"], input[type="email"], input[type="password"], input:not([type]), textarea');
+                    elements.forEach((el) => {
+                        const input = el;
+                        if (input.value && input.value.trim().length > 0) {
+                            const selector = input.name || input.id || input.placeholder || input.tagName.toLowerCase();
+                            allInputs.push({
+                                selector: selector,
+                                value: input.value
+                            });
+                        }
+                    });
+                    return allInputs;
+                });
+                // Check for new or changed values
+                inputs.forEach(({ selector, value }) => {
+                    const key = selector;
+                    const lastValue = trackedInputs.get(key);
+                    if (lastValue !== value) {
+                        trackedInputs.set(key, value);
+                        // Always record, even for initial values
+                        recordInteraction("Entered \"" + value + "\" into " + selector);
+                    }
+                });
+            }
+            catch (err) {
+                // Page might be navigating, ignore
+            }
+        }, 1000); // Check every second
+        // Track clicks using console messages
+        page.on('console', async (msg) => {
+            const text = msg.text();
+            if (text.startsWith('CLICK:')) {
+                const parts = text.substring(6).split('|');
+                recordInteraction("Clicked on \"" + parts[1] + "\" (" + parts[0] + ")");
+            }
         });
-        await page.exposeFunction('recordInput', (selector, value) => {
-            recordInteraction("Entered \"" + value + "\" into " + selector);
-        });
-        await page.exposeFunction('recordHover', (selector) => {
-            recordInteraction("Hovered over " + selector);
-        });
-        await page.exposeFunction('recordScroll', (direction, amount) => {
-            recordInteraction("Scrolled " + direction + " by " + amount + " pixels");
-        });
-        // Inject event listeners into page
+        // Inject click tracking via console
         await page.addInitScript(() => {
-            // Track clicks
             document.addEventListener('click', (e) => {
                 const target = e.target;
                 const tagName = target.tagName.toLowerCase();
-                const text = target.textContent?.trim().substring(0, 50) || '';
+                const text = target.textContent?.trim().substring(0, 50) || target.getAttribute('aria-label') || '';
                 const selector = tagName + (target.id ? '#' + target.id : '') + (target.className ? '.' + target.className.split(' ')[0] : '');
-                window.recordClick?.(selector, text);
-            }, true);
-            // Track input
-            document.addEventListener('input', (e) => {
-                const target = e.target;
-                if (target.value) {
-                    const selector = target.name || target.id || target.tagName.toLowerCase();
-                    window.recordInput?.(selector, target.value);
-                }
-            }, true);
-            // Track hover (mouseover)
-            document.addEventListener('mouseover', (e) => {
-                const target = e.target;
-                const tagName = target.tagName.toLowerCase();
-                if (['button', 'a', 'input'].includes(tagName)) {
-                    const selector = tagName + (target.id ? '#' + target.id : '');
-                    window.recordHover?.(selector);
-                }
-            }, true);
-            // Track scroll
-            let lastScroll = 0;
-            window.addEventListener('scroll', () => {
-                const currentScroll = window.scrollY;
-                const direction = currentScroll > lastScroll ? 'down' : 'up';
-                const amount = Math.abs(currentScroll - lastScroll);
-                if (amount > 50) { // Only record significant scrolls
-                    window.recordScroll?.(direction, amount);
-                    lastScroll = currentScroll;
-                }
+                console.log('CLICK:' + selector + '|' + text);
             }, true);
         });
         console.error("✓ Browser capture activated!");
