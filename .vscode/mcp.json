@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "step-recorder": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["c:\\mcp\\build\\index.js"]
+    }
+  }
+}
