@@ -6,12 +6,12 @@
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+import path from "path";
 import fs from "fs";
 import { chromium } from "playwright";
+import ExcelJS from "exceljs";
 const recordedSteps = [];
 let stepCounter = 0;
-let browser = null;
 let context = null;
 let page = null;
 // Generate filename with format TestSteps_{dd/mm/yy_timestamp}
@@ -23,37 +23,70 @@ function generateStepsFilename() {
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
-    return `TestSteps_${day}-${month}-${year}_${hours}-${minutes}-${seconds}.txt`;
+    const stepRecorderDir = path.join(process.cwd(), 'StepRecorder');
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(stepRecorderDir)) {
+        fs.mkdirSync(stepRecorderDir, { recursive: true });
+    }
+    return path.join(stepRecorderDir, `TestSteps_${day}-${month}-${year}_${hours}-${minutes}-${seconds}.xlsx`);
 }
 const STEPS_FILE = generateStepsFilename();
-// Save formatted steps to file
-function saveFormattedSteps() {
+// Save formatted steps to Excel file
+async function saveFormattedSteps() {
     try {
-        let output = "═══════════════════════════════════════════════════════\n";
-        output += "        LIVE BROWSER INTERACTIONS CAPTURED\n";
-        output += "═══════════════════════════════════════════════════════\n\n";
-        output += "Session Started: " + (recordedSteps.length > 0 ? recordedSteps[0].timestamp : new Date().toISOString()) + "\n\n";
-        output += "───────────────────────────────────────────────────────\n\n";
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Test Steps');
+        // Add header row with styling
+        worksheet.columns = [
+            { header: 'Step No', key: 'stepNumber', width: 10 },
+            { header: 'Actual Step', key: 'step', width: 50 },
+            { header: 'Locator', key: 'locator', width: 60 },
+            { header: 'Expected Results', key: 'expectedResult', width: 40 }
+        ];
+        // Style header row
+        worksheet.getRow(1).font = { bold: true, size: 12 };
+        worksheet.getRow(1).fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FF4472C4' }
+        };
+        worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        // Add data rows
         recordedSteps.forEach((s) => {
-            output += "Step " + s.stepNumber + ": " + s.step + "\n\n";
+            worksheet.addRow({
+                stepNumber: s.stepNumber,
+                step: s.step,
+                locator: s.locator,
+                expectedResult: s.expectedResult
+            });
         });
-        output += "───────────────────────────────────────────────────────\n";
-        output += "End of Recording - " + new Date().toLocaleString() + "\n";
-        output += "═══════════════════════════════════════════════════════\n";
-        fs.writeFileSync(STEPS_FILE, output, "utf-8");
+        // Auto-fit columns and add borders
+        worksheet.eachRow((row, rowNumber) => {
+            row.eachCell((cell) => {
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' }
+                };
+            });
+        });
+        await workbook.xlsx.writeFile(STEPS_FILE);
     }
     catch (error) {
         console.error("Error saving steps:", error);
     }
 }
 // Record a browser interaction
-function recordInteraction(description) {
+function recordInteraction(description, locator = '', expectedResult = '') {
     stepCounter++;
     const timestamp = new Date().toISOString();
     recordedSteps.push({
         timestamp,
         step: description,
-        stepNumber: stepCounter
+        stepNumber: stepCounter,
+        locator: locator,
+        expectedResult: expectedResult
     });
     saveFormattedSteps();
     console.error("✓ Step " + stepCounter + ": " + description);
@@ -62,80 +95,314 @@ function recordInteraction(description) {
 async function launchBrowserWithCapture() {
     try {
         console.error("\n🚀 Launching browser with interaction capture...");
-        // Launch browser
-        browser = await chromium.launch({
+        // Use persistent context for better trust (keeps cookies, cache, etc.)
+        const userDataDir = path.join(process.cwd(), 'Output', 'browser-profile');
+        context = await chromium.launchPersistentContext(userDataDir, {
             headless: false,
-            args: ['--start-maximized']
+            viewport: null,
+            args: [
+                '--start-maximized',
+                '--no-default-browser-check',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--disable-setuid-sandbox',
+                '--no-sandbox',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--allow-running-insecure-content',
+                '--disable-infobars',
+                '--window-position=0,0',
+                '--ignore-certificate-errors',
+                '--ignore-certificate-errors-spki-list',
+                '--disable-extensions-except',
+                '--disable-extensions'
+            ],
+            ignoreDefaultArgs: ['--enable-automation'],
+            permissions: ['geolocation', 'notifications'],
+            locale: 'en-US',
+            timezoneId: 'America/New_York',
+            bypassCSP: true
         });
-        context = await browser.newContext({
-            viewport: null
+        // Get the first page (persistent context opens with one page)
+        const pages = context.pages();
+        page = pages.length > 0 ? pages[0] : await context.newPage();
+        // Comprehensive bot detection evasion
+        await page.addInitScript(() => {
+            // Override webdriver flag
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+            });
+            // Override chrome runtime
+            window.chrome = {
+                runtime: {},
+            };
+            // Override permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (parameters.name === 'notifications' ?
+                Promise.resolve({ state: 'granted' }) :
+                originalQuery(parameters));
+            // Override plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            // Override languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
         });
-        page = await context.newPage();
-        recordInteraction("Browser launched successfully");
+        recordInteraction("Browser launched successfully", "", "Browser should open");
         // Navigate to Google
         await page.goto("http://google.com");
-        recordInteraction("Navigated to http://google.com");
+        recordInteraction("Navigated to http://google.com", "", "Page should load successfully");
         // Set up navigation listener
         page.on('framenavigated', async (frame) => {
             if (frame === page.mainFrame()) {
                 const url = frame.url();
                 if (!url.includes('about:blank') && !url.includes('google.com/')) {
-                    recordInteraction("Navigated to " + url);
+                    recordInteraction("Navigated to " + url, "", "Page should load successfully");
                 }
             }
         });
-        // Track input fields being filled using polling
+        // Track input fields using blur events to capture complete text
         const trackedInputs = new Map();
-        setInterval(async () => {
-            if (!page)
-                return;
-            try {
-                const inputs = await page.evaluate(() => {
-                    const allInputs = [];
-                    const elements = document.querySelectorAll('input[type="text"], input[type="search"], input[type="email"], input[type="password"], input:not([type]), textarea');
-                    elements.forEach((el) => {
-                        const input = el;
-                        if (input.value && input.value.trim().length > 0) {
-                            const selector = input.name || input.id || input.placeholder || input.tagName.toLowerCase();
-                            allInputs.push({
-                                selector: selector,
-                                value: input.value
-                            });
-                        }
-                    });
-                    return allInputs;
-                });
-                // Check for new or changed values
-                inputs.forEach(({ selector, value }) => {
-                    const key = selector;
-                    const lastValue = trackedInputs.get(key);
-                    if (lastValue !== value) {
-                        trackedInputs.set(key, value);
-                        // Always record, even for initial values
-                        recordInteraction("Entered \"" + value + "\" into " + selector);
+        // Inject blur event listeners to capture complete input values
+        await page.addInitScript(() => {
+            // Helper function to generate relative XPath
+            function getXPath(element) {
+                const el = element;
+                // Priority 1: Use ID if available
+                if (el.id) {
+                    return `//*[@id="${el.id}"]`;
+                }
+                // Priority 2: Use name attribute (common for inputs)
+                if (el.getAttribute('name')) {
+                    return `//${el.tagName.toLowerCase()}[@name="${el.getAttribute('name')}"]`;
+                }
+                // Priority 3: Use type and placeholder for inputs
+                if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
+                    const type = el.getAttribute('type');
+                    const placeholder = el.getAttribute('placeholder');
+                    const ariaLabel = el.getAttribute('aria-label');
+                    if (type && placeholder) {
+                        return `//${el.tagName.toLowerCase()}[@type="${type}" and @placeholder="${placeholder}"]`;
                     }
-                });
+                    if (placeholder) {
+                        return `//${el.tagName.toLowerCase()}[@placeholder="${placeholder}"]`;
+                    }
+                    if (ariaLabel) {
+                        return `//${el.tagName.toLowerCase()}[@aria-label="${ariaLabel}"]`;
+                    }
+                    if (type) {
+                        return `//${el.tagName.toLowerCase()}[@type="${type}"]`;
+                    }
+                }
+                // Priority 4: Use class if available (first class only)
+                if (el.className && typeof el.className === 'string') {
+                    const firstClass = el.className.split(' ')[0];
+                    if (firstClass) {
+                        return `//${el.tagName.toLowerCase()}[@class="${firstClass}"]`;
+                    }
+                }
+                // Priority 5: Use tag with index
+                let ix = 1;
+                const siblings = element.parentNode?.children;
+                if (siblings) {
+                    for (let i = 0; i < siblings.length; i++) {
+                        const sibling = siblings[i];
+                        if (sibling === element) {
+                            return `//${el.tagName.toLowerCase()}[${ix}]`;
+                        }
+                        if (sibling.tagName === element.tagName) {
+                            ix++;
+                        }
+                    }
+                }
+                return `//${el.tagName.toLowerCase()}`;
             }
-            catch (err) {
-                // Page might be navigating, ignore
+            // Track initial values to detect changes
+            const initialValues = new Map();
+            const typingTimers = new Map();
+            // Listen for focus events to track initial values
+            document.addEventListener('focus', (e) => {
+                const target = e.target;
+                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+                    const input = target;
+                    const inputType = (input.getAttribute('type') || 'text').toLowerCase();
+                    // Skip non-text inputs
+                    const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
+                    if (!skipTypes.includes(inputType)) {
+                        // Only set initial value if not already set
+                        if (!initialValues.has(input)) {
+                            initialValues.set(input, input.value);
+                        }
+                    }
+                }
+            }, true);
+            // Function to record input value
+            function recordInputValue(input, immediate = false) {
+                // Ensure we have an initial value set
+                if (!initialValues.has(input)) {
+                    initialValues.set(input, '');
+                }
+                const currentValue = input.value.trim();
+                const initialValue = initialValues.get(input) || '';
+                // Clear any existing timer for this input
+                const existingTimer = typingTimers.get(input);
+                if (existingTimer) {
+                    clearTimeout(existingTimer);
+                    typingTimers.delete(input);
+                }
+                // Only record if value is not empty and changed from initial
+                if (currentValue && currentValue !== initialValue) {
+                    if (immediate) {
+                        const fieldName = input.name || input.id || input.placeholder || input.getAttribute('aria-label') || 'input field';
+                        const xpath = getXPath(input);
+                        console.log('INPUT_COMPLETE:' + fieldName + '|' + currentValue + '|' + xpath);
+                        initialValues.set(input, currentValue);
+                    }
+                    else {
+                        // Wait 1.5 seconds after last keystroke before recording
+                        const timer = window.setTimeout(() => {
+                            const finalValue = input.value.trim();
+                            const lastInitialValue = initialValues.get(input) || '';
+                            if (finalValue && finalValue !== lastInitialValue) {
+                                const fieldName = input.name || input.id || input.placeholder || input.getAttribute('aria-label') || 'input field';
+                                const xpath = getXPath(input);
+                                console.log('INPUT_COMPLETE:' + fieldName + '|' + finalValue + '|' + xpath);
+                                initialValues.set(input, finalValue);
+                            }
+                            typingTimers.delete(input);
+                        }, 1500);
+                        typingTimers.set(input, timer);
+                    }
+                }
             }
-        }, 1000); // Check every second
-        // Track clicks using console messages
+            // Listen for input events (typing) with debounce
+            document.addEventListener('input', (e) => {
+                const target = e.target;
+                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+                    const input = target;
+                    const inputType = (input.getAttribute('type') || 'text').toLowerCase();
+                    // Skip non-text inputs like checkbox, radio, file, etc.
+                    const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
+                    if (!skipTypes.includes(inputType)) {
+                        recordInputValue(input, false);
+                    }
+                }
+            }, true);
+            // Listen for blur events to capture complete values immediately
+            document.addEventListener('blur', (e) => {
+                const target = e.target;
+                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+                    const input = target;
+                    const inputType = (input.getAttribute('type') || 'text').toLowerCase();
+                    // Skip non-text inputs
+                    const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
+                    if (!skipTypes.includes(inputType)) {
+                        recordInputValue(input, true);
+                    }
+                }
+            }, true);
+            // Listen for Enter key to capture values immediately when submitting
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    const target = e.target;
+                    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+                        const input = target;
+                        const inputType = (input.getAttribute('type') || 'text').toLowerCase();
+                        // Skip non-text inputs
+                        const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
+                        if (!skipTypes.includes(inputType)) {
+                            recordInputValue(input, true);
+                        }
+                    }
+                }
+            }, true);
+        });
+        // Track complete input values via console messages
         page.on('console', async (msg) => {
             const text = msg.text();
-            if (text.startsWith('CLICK:')) {
+            if (text.startsWith('INPUT_COMPLETE:')) {
+                const parts = text.substring(15).split('|');
+                const fieldName = parts[0] || 'input field';
+                const value = parts[1] || '';
+                const xpath = parts[2] || '';
+                const key = fieldName + xpath;
+                // Only record if we haven't already recorded this exact value
+                if (trackedInputs.get(key) !== value) {
+                    trackedInputs.set(key, value);
+                    recordInteraction(`Entered "${value}" into ${fieldName}`, xpath, `Field should contain "${value}"`);
+                }
+            }
+            else if (text.startsWith('CLICK:')) {
                 const parts = text.substring(6).split('|');
-                recordInteraction("Clicked on \"" + parts[1] + "\" (" + parts[0] + ")");
+                const xpath = parts[2] || '';
+                const elementText = parts[1] || 'element';
+                recordInteraction(`Clicked on "${elementText}"`, xpath, `Element should be clickable`);
             }
         });
-        // Inject click tracking via console
+        // Inject click tracking via console with XPath
         await page.addInitScript(() => {
+            // Helper function to generate relative XPath
+            function getXPath(element) {
+                const el = element;
+                // Priority 1: Use ID if available
+                if (el.id) {
+                    return `//*[@id="${el.id}"]`;
+                }
+                // Priority 2: Use name attribute
+                if (el.getAttribute('name')) {
+                    return `//${el.tagName.toLowerCase()}[@name="${el.getAttribute('name')}"]`;
+                }
+                // Priority 3: Use text content for buttons, links, labels
+                if (['button', 'a', 'label', 'span'].includes(el.tagName.toLowerCase())) {
+                    const text = el.textContent?.trim();
+                    if (text && text.length > 0 && text.length <= 30) {
+                        return `//${el.tagName.toLowerCase()}[text()="${text}"]`;
+                    }
+                }
+                // Priority 4: Use aria-label
+                if (el.getAttribute('aria-label')) {
+                    return `//${el.tagName.toLowerCase()}[@aria-label="${el.getAttribute('aria-label')}"]`;
+                }
+                // Priority 5: Use title attribute
+                if (el.getAttribute('title')) {
+                    return `//${el.tagName.toLowerCase()}[@title="${el.getAttribute('title')}"]`;
+                }
+                // Priority 6: Use type attribute (for inputs, buttons)
+                if (el.getAttribute('type')) {
+                    return `//${el.tagName.toLowerCase()}[@type="${el.getAttribute('type')}"]`;
+                }
+                // Priority 7: Use class if available (first class only)
+                if (el.className && typeof el.className === 'string') {
+                    const firstClass = el.className.split(' ')[0];
+                    if (firstClass) {
+                        return `//${el.tagName.toLowerCase()}[@class="${firstClass}"]`;
+                    }
+                }
+                // Priority 8: Use tag with index
+                let ix = 1;
+                const siblings = element.parentNode?.children;
+                if (siblings) {
+                    for (let i = 0; i < siblings.length; i++) {
+                        const sibling = siblings[i];
+                        if (sibling === element) {
+                            return `//${el.tagName.toLowerCase()}[${ix}]`;
+                        }
+                        if (sibling.tagName === element.tagName) {
+                            ix++;
+                        }
+                    }
+                }
+                return `//${el.tagName.toLowerCase()}`;
+            }
             document.addEventListener('click', (e) => {
                 const target = e.target;
                 const tagName = target.tagName.toLowerCase();
-                const text = target.textContent?.trim().substring(0, 50) || target.getAttribute('aria-label') || '';
+                const text = target.textContent?.trim().substring(0, 50) || target.getAttribute('aria-label') || target.getAttribute('title') || '';
+                const xpath = getXPath(target);
                 const selector = tagName + (target.id ? '#' + target.id : '') + (target.className ? '.' + target.className.split(' ')[0] : '');
-                console.log('CLICK:' + selector + '|' + text);
+                console.log('CLICK:' + selector + '|' + text + '|' + xpath);
             }, true);
         });
         console.error("✓ Browser capture activated!");
@@ -181,7 +448,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             inputSchema: {
                 type: "object",
                 properties: {
-                    note: z.string().describe("Note to add"),
+                    note: { type: "string", description: "Note to add" },
                 },
                 required: ["note"],
             },
@@ -218,7 +485,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         case "record_manual_note": {
             const note = args.note;
-            recordInteraction("Note: " + note);
+            recordInteraction("Note: " + note, "", "");
             return {
                 content: [
                     {
@@ -280,8 +547,6 @@ process.on('SIGINT', async () => {
         await page.close();
     if (context)
         await context.close();
-    if (browser)
-        await browser.close();
     console.error("✓ Browser closed");
     console.error("✓ All interactions saved to: " + STEPS_FILE);
     process.exit(0);

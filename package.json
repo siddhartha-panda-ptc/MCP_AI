@@ -4,15 +4,10 @@
   "description": "MCP server that records user steps and writes them in English",
   "type": "module",
   "bin": {
-    "step-recorder": "./build/index.js"
+    "step-recorder": "./build/browser-capture-index.js"
   },
   "scripts": {
     "build": "tsc",
-    "build:examples": "tsc --project examples/tsconfig.json",
-    "agent:browser": "npm run build:examples && node examples/build/browser-agent.js",
-    "agent:task": "npm run build:examples && node examples/build/task-agent.js",
-    "example:quick": "node examples/quick-start.js",
-    "example:integration": "npm run build:examples && node examples/build/integration-example.js",
     "prepare": "npm run build"
   },
   "keywords": [
@@ -23,10 +18,11 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "exceljs": "^4.4.0",
     "playwright": "^1.57.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.19.8",
     "typescript": "^5.7.2"
   },
   "files": [
