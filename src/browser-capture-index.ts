@@ -858,6 +858,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const reportPath = path.join(resultsDir, reportFileName);
 
         const passedCount = detailedResults.filter(r => r.status === 'Passed').length;
+
+        // Read logo image and convert to base64
+        let logoBase64 = '';
+        const logoPath = path.join('c:\\mcp', 'assets', 'logo.png');
+        try {
+          if (fs.existsSync(logoPath)) {
+            const logoBuffer = fs.readFileSync(logoPath);
+            logoBase64 = logoBuffer.toString('base64');
+          }
+        } catch (logoError) {
+          console.error('Could not load logo:', logoError);
+        }
         const failedCount = detailedResults.filter(r => r.status === 'Failed').length;
         const skippedCount = detailedResults.filter(r => r.status === 'Skipped').length;
         const infoCount = detailedResults.filter(r => r.status === 'Info').length;
@@ -917,14 +929,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         .duration-col { font-weight: 600; color: #4472c4; }
         .footer { text-align: center; padding: 20px; color: #999; font-size: 12px; }
         .donut-chart { width: 150px; height: 150px; margin: 0 auto; }
+        .header-content { display: flex; align-items: center; gap: 20px; }
+        .logo { width: 80px; height: 80px; object-fit: contain; border-radius: 8px; background: white; padding: 5px; }
+        .header-text { flex: 1; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎭 E2E Playback Execution Report</h1>
-            <div class="subtitle">Automated Test Execution Results</div>
-            <div class="overall-status ${overallStatus.toLowerCase()}">${overallStatus}</div>
+            <div class="header-content">
+                ${logoBase64 ? `<img src="data:image/png;base64,${logoBase64}" alt="Logo" class="logo">` : ''}
+                <div class="header-text">
+                    <h1>E2E Playback Execution Report</h1>
+                    <div class="subtitle">Automated Test Execution Results</div>
+                    <div class="overall-status ${overallStatus.toLowerCase()}">${overallStatus}</div>
+                </div>
+            </div>
         </div>
 
         <div class="cards">
@@ -948,12 +968,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         <div class="stat-label">ℹ Info</div>
                     </div>
                 </div>
-                <div class="progress-bar">
-                    <div class="progress-fill ${failedCount > 0 ? 'has-failures' : ''}" style="width: 100%"></div>
-                </div>
-                <div style="text-align: center; margin-top: 10px; font-size: 14px; color: #666;">
-                    Pass Rate: <strong style="color: ${failedCount === 0 ? '#10b981' : '#ef4444'}">${passRate}%</strong>
-                </div>
             </div>
 
             <div class="card">
@@ -963,7 +977,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     <tr><td>Start Time</td><td>${executionStartTime.toLocaleTimeString('en-GB', { hour12: true })}</td></tr>
                     <tr><td>End Time</td><td>${executionEndTime.toLocaleTimeString('en-GB', { hour12: true })}</td></tr>
                     <tr><td>Total Duration</td><td><strong>${(totalDuration / 1000).toFixed(2)} seconds</strong></td></tr>
-                    <tr><td>Avg Step Duration</td><td>${(totalDuration / detailedResults.length / 1000).toFixed(2)} seconds</td></tr>
                 </table>
             </div>
 
@@ -972,7 +985,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 <table class="env-table">
                     <tr><td>Test File</td><td style="word-break: break-all; font-size: 12px;">${excelPath}</td></tr>
                     <tr><td>Platform</td><td>${process.platform}</td></tr>
-                    <tr><td>Node Version</td><td>${process.version}</td></tr>
                     <tr><td>Architecture</td><td>${process.arch}</td></tr>
                     <tr><td>Browser</td><td>Chromium (Playwright)</td></tr>
                 </table>
@@ -1004,7 +1016,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         <td class="error">${escapeHtml(r.errorMessage || '-')}</td>
                         <td class="time-col">${new Date(r.startTime).toLocaleTimeString('en-GB')}</td>
                         <td class="time-col">${new Date(r.endTime).toLocaleTimeString('en-GB')}</td>
-                        <td class="duration-col">${r.duration}ms</td>
+                        <td class="duration-col">${(r.duration / 1000).toFixed(2)}s</td>
                     </tr>
                     `).join('')}
                 </tbody>
