@@ -462,6 +462,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 required: ["note"],
             },
         },
+        {
+            name: "execute_steps",
+            description: "Execute/replay captured steps from the Excel file (codeless execution)",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    filePath: {
+                        type: "string",
+                        description: "Optional: Path to Excel file with steps. If not provided, uses the latest captured steps file."
+                    },
+                },
+            },
+        },
     ],
 }));
 // Handle tool calls
@@ -503,6 +516,155 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     },
                 ],
             };
+        }
+        case "execute_steps": {
+            try {
+                const filePathArg = args?.filePath;
+                const excelPath = filePathArg || STEPS_FILE;
+                if (!fs.existsSync(excelPath)) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: "Error: Steps file not found at " + excelPath,
+                            },
+                        ],
+                    };
+                }
+                // Check if browser is available, if not return error
+                if (!page || !context) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: "Error: Browser is not running. Please ensure the MCP server has launched the browser first.",
+                            },
+                        ],
+                    };
+                }
+                // Check if page is still active
+                try {
+                    await page.title();
+                }
+                catch (e) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: "Error: Browser page is closed. Please restart the MCP server to launch a new browser.",
+                            },
+                        ],
+                    };
+                }
+                // Read Excel file
+                const workbook = new ExcelJS.Workbook();
+                await workbook.xlsx.readFile(excelPath);
+                const worksheet = workbook.getWorksheet('Test Steps');
+                if (!worksheet) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: "Error: 'Test Steps' worksheet not found in file",
+                            },
+                        ],
+                    };
+                }
+                const executionResults = [];
+                let successCount = 0;
+                let failCount = 0;
+                console.error("\n" + "=".repeat(60));
+                console.error("Starting Codeless Execution");
+                console.error("=".repeat(60));
+                // Execute each step
+                for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
+                    const row = worksheet.getRow(rowNum);
+                    const stepNum = row.getCell(1).value?.toString() || '';
+                    const actualStep = row.getCell(2).value?.toString() || '';
+                    const locator = row.getCell(3).value?.toString() || '';
+                    if (!actualStep)
+                        continue;
+                    try {
+                        console.error(`\n▶ Executing Step ${stepNum}: ${actualStep}`);
+                        // Parse and execute the step
+                        if (actualStep.includes('Navigated to ')) {
+                            const url = actualStep.replace('Navigated to ', '');
+                            await page.goto(url, { waitUntil: 'domcontentloaded' });
+                            executionResults.push(`✓ Step ${stepNum}: Navigated to ${url}`);
+                            successCount++;
+                        }
+                        else if (actualStep.includes('Clicked on ')) {
+                            if (locator) {
+                                await page.locator(locator).first().click({ timeout: 5000 });
+                                executionResults.push(`✓ Step ${stepNum}: ${actualStep}`);
+                                successCount++;
+                            }
+                            else {
+                                executionResults.push(`⚠ Step ${stepNum}: Skipped - No locator`);
+                            }
+                        }
+                        else if (actualStep.includes('Entered "') && actualStep.includes('" into ')) {
+                            const match = actualStep.match(/Entered "(.+)" into (.+)/);
+                            if (match && locator) {
+                                const value = match[1];
+                                await page.locator(locator).first().fill(value, { timeout: 5000 });
+                                executionResults.push(`✓ Step ${stepNum}: Entered "${value}"`);
+                                successCount++;
+                            }
+                            else {
+                                executionResults.push(`⚠ Step ${stepNum}: Skipped - No locator`);
+                            }
+                        }
+                        else if (actualStep.includes('New tab/window opened:')) {
+                            const url = actualStep.replace('New tab/window opened: ', '');
+                            // Wait for new page
+                            const newPagePromise = context.waitForEvent('page');
+                            const newPage = await newPagePromise;
+                            await newPage.waitForLoadState('domcontentloaded');
+                            executionResults.push(`✓ Step ${stepNum}: New tab opened - ${url}`);
+                            successCount++;
+                        }
+                        else if (actualStep.includes('Browser launched') || actualStep.includes('Note:')) {
+                            executionResults.push(`ℹ Step ${stepNum}: ${actualStep} (info only)`);
+                        }
+                        else {
+                            executionResults.push(`⚠ Step ${stepNum}: Unsupported step type - ${actualStep}`);
+                        }
+                        // Small delay between steps
+                        await page.waitForTimeout(500);
+                    }
+                    catch (error) {
+                        const errorMsg = error.message || String(error);
+                        executionResults.push(`✗ Step ${stepNum}: Failed - ${errorMsg}`);
+                        failCount++;
+                        console.error(`✗ Step ${stepNum} failed:`, errorMsg);
+                    }
+                }
+                const summary = `\n${'='.repeat(60)}\nExecution Summary:\n${'='.repeat(60)}\n` +
+                    `Total Steps: ${successCount + failCount}\n` +
+                    `✓ Successful: ${successCount}\n` +
+                    `✗ Failed: ${failCount}\n` +
+                    `${'='.repeat(60)}\n`;
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: "Codeless Execution Results:\n\n" +
+                                executionResults.join("\n") + "\n" + summary,
+                        },
+                    ],
+                };
+            }
+            catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: "Error during execution: " + (error.message || String(error)),
+                        },
+                    ],
+                };
+            }
         }
         default:
             throw new Error("Unknown tool: " + name);
