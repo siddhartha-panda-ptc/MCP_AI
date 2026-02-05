@@ -10,6 +10,17 @@ import path from "path";
 import fs from "fs";
 import { chromium } from "playwright";
 import ExcelJS from "exceljs";
+// HTML escape helper function
+function escapeHtml(text) {
+    const htmlEntities = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    };
+    return text.replace(/[&<>"']/g, char => htmlEntities[char]);
+}
 const recordedSteps = [];
 let stepCounter = 0;
 let context = null;
@@ -90,6 +101,50 @@ function recordInteraction(description, locator = '', expectedResult = '') {
     });
     saveFormattedSteps();
     console.error("✓ Step " + stepCounter + ": " + description);
+}
+// Launch browser for execution only (no recording setup)
+async function launchBrowserForExecution() {
+    try {
+        console.error("\n🚀 Launching browser for execution...");
+        const userDataDir = path.join(process.cwd(), 'Output', 'browser-profile');
+        context = await chromium.launchPersistentContext(userDataDir, {
+            headless: false,
+            viewport: null,
+            args: [
+                '--start-maximized',
+                '--no-default-browser-check',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--disable-setuid-sandbox',
+                '--no-sandbox',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--allow-running-insecure-content',
+                '--disable-infobars',
+                '--ignore-certificate-errors',
+                '--ignore-certificate-errors-spki-list',
+                '--disable-extensions-except',
+                '--disable-extensions'
+            ],
+            ignoreDefaultArgs: ['--enable-automation'],
+            permissions: ['geolocation', 'notifications'],
+            locale: 'en-US',
+            timezoneId: 'America/New_York',
+            bypassCSP: true
+        });
+        const pages = context.pages();
+        page = pages.length > 0 ? pages[0] : await context.newPage();
+        // Bot detection evasion
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            window.chrome = { runtime: {} };
+        });
+        console.error("✓ Browser ready for execution");
+    }
+    catch (error) {
+        console.error("Error launching browser for execution:", error);
+        throw error;
+    }
 }
 // Launch browser and set up event listeners
 async function launchBrowserWithCapture() {
@@ -554,30 +609,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         ],
                     };
                 }
-                // Check if browser is available, if not return error
+                // Check if browser is available, if not launch one
                 if (!page || !context) {
-                    return {
-                        content: [
-                            {
-                                type: "text",
-                                text: "Error: Browser is not running. Please ensure the MCP server has launched the browser first.",
-                            },
-                        ],
-                    };
+                    console.error("Browser not running, launching for execution...");
+                    await launchBrowserForExecution();
                 }
-                // Check if page is still active
+                // Check if page is still active, if not relaunch
                 try {
                     await page.title();
                 }
                 catch (e) {
-                    return {
-                        content: [
-                            {
-                                type: "text",
-                                text: "Error: Browser page is closed. Please restart the MCP server to launch a new browser.",
-                            },
-                        ],
-                    };
+                    console.error("Browser page closed, relaunching for execution...");
+                    await launchBrowserForExecution();
                 }
                 // Read Excel file
                 const workbook = new ExcelJS.Workbook();
@@ -596,6 +639,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const executionResults = [];
                 let successCount = 0;
                 let failCount = 0;
+                const detailedResults = [];
+                const executionStartTime = new Date();
                 console.error("\n" + "=".repeat(60));
                 console.error("Starting Codeless Execution");
                 console.error("=".repeat(60));
@@ -607,6 +652,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     const locator = row.getCell(3).value?.toString() || '';
                     if (!actualStep)
                         continue;
+                    const stepStartTime = new Date();
+                    let stepStatus = 'Passed';
+                    let errorMessage = '';
                     try {
                         console.error(`\n▶ Executing Step ${stepNum}: ${actualStep}`);
                         // Parse and execute the step
@@ -615,15 +663,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             await page.goto(url, { waitUntil: 'domcontentloaded' });
                             executionResults.push(`✓ Step ${stepNum}: Navigated to ${url}`);
                             successCount++;
+                            stepStatus = 'Passed';
                         }
                         else if (actualStep.includes('Clicked on ')) {
                             if (locator) {
                                 await page.locator(locator).first().click({ timeout: 5000 });
                                 executionResults.push(`✓ Step ${stepNum}: ${actualStep}`);
                                 successCount++;
+                                stepStatus = 'Passed';
                             }
                             else {
                                 executionResults.push(`⚠ Step ${stepNum}: Skipped - No locator`);
+                                stepStatus = 'Skipped';
+                                errorMessage = 'No locator provided';
                             }
                         }
                         else if (actualStep.includes('Entered "') && actualStep.includes('" into ')) {
@@ -633,9 +685,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                                 await page.locator(locator).first().fill(value, { timeout: 5000 });
                                 executionResults.push(`✓ Step ${stepNum}: Entered "${value}"`);
                                 successCount++;
+                                stepStatus = 'Passed';
                             }
                             else {
                                 executionResults.push(`⚠ Step ${stepNum}: Skipped - No locator`);
+                                stepStatus = 'Skipped';
+                                errorMessage = 'No locator provided';
                             }
                         }
                         else if (actualStep.includes('New tab/window opened:')) {
@@ -646,28 +701,234 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             await newPage.waitForLoadState('domcontentloaded');
                             executionResults.push(`✓ Step ${stepNum}: New tab opened - ${url}`);
                             successCount++;
+                            stepStatus = 'Passed';
                         }
                         else if (actualStep.includes('Browser launched') || actualStep.includes('Note:')) {
                             executionResults.push(`ℹ Step ${stepNum}: ${actualStep} (info only)`);
+                            stepStatus = 'Info';
                         }
                         else {
                             executionResults.push(`⚠ Step ${stepNum}: Unsupported step type - ${actualStep}`);
+                            stepStatus = 'Skipped';
+                            errorMessage = 'Unsupported step type';
                         }
                         // Small delay between steps
                         await page.waitForTimeout(500);
                     }
                     catch (error) {
-                        const errorMsg = error.message || String(error);
-                        executionResults.push(`✗ Step ${stepNum}: Failed - ${errorMsg}`);
+                        errorMessage = error.message || String(error);
+                        executionResults.push(`✗ Step ${stepNum}: Failed - ${errorMessage}`);
                         failCount++;
-                        console.error(`✗ Step ${stepNum} failed:`, errorMsg);
+                        stepStatus = 'Failed';
+                        console.error(`✗ Step ${stepNum} failed:`, errorMessage);
+                    }
+                    const stepEndTime = new Date();
+                    detailedResults.push({
+                        stepNum,
+                        action: actualStep,
+                        locator,
+                        status: stepStatus,
+                        errorMessage,
+                        startTime: stepStartTime.toISOString(),
+                        endTime: stepEndTime.toISOString(),
+                        duration: stepEndTime.getTime() - stepStartTime.getTime()
+                    });
+                }
+                const executionEndTime = new Date();
+                const totalDuration = executionEndTime.getTime() - executionStartTime.getTime();
+                // Save detailed HTML report to Results folder
+                const resultsDir = path.join('c:\\mcp', 'Results');
+                if (!fs.existsSync(resultsDir)) {
+                    fs.mkdirSync(resultsDir, { recursive: true });
+                }
+                // Format timestamp for filename
+                const timestamp = new Date();
+                const dateStr = timestamp.toLocaleDateString('en-GB').replace(/\//g, '-');
+                const timeStr = timestamp.toLocaleTimeString('en-GB', { hour12: false }).replace(/:/g, '-');
+                const reportFileName = `ExecutionReport_${dateStr}_${timeStr}.html`;
+                const reportPath = path.join(resultsDir, reportFileName);
+                const passedCount = detailedResults.filter(r => r.status === 'Passed').length;
+                const failedCount = detailedResults.filter(r => r.status === 'Failed').length;
+                const skippedCount = detailedResults.filter(r => r.status === 'Skipped').length;
+                const infoCount = detailedResults.filter(r => r.status === 'Info').length;
+                const executableSteps = detailedResults.length - infoCount;
+                const passRate = executableSteps > 0 ? ((passedCount / executableSteps) * 100).toFixed(1) : '0';
+                const overallStatus = failedCount === 0 ? 'PASSED' : 'FAILED';
+                // Generate HTML report
+                const htmlReport = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E2E Playback Execution Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f7fa; color: #333; line-height: 1.6; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3); }
+        .header h1 { font-size: 28px; margin-bottom: 5px; }
+        .header .subtitle { opacity: 0.9; font-size: 14px; }
+        .overall-status { display: inline-block; padding: 8px 20px; border-radius: 20px; font-weight: bold; font-size: 18px; margin-top: 15px; }
+        .overall-status.passed { background: #10b981; }
+        .overall-status.failed { background: #ef4444; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .card { background: white; border-radius: 12px; padding: 25px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+        .card h2 { font-size: 16px; color: #666; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .stat-item { text-align: center; padding: 15px; background: #f8f9fa; border-radius: 8px; }
+        .stat-value { font-size: 32px; font-weight: bold; }
+        .stat-value.passed { color: #10b981; }
+        .stat-value.failed { color: #ef4444; }
+        .stat-value.skipped { color: #f59e0b; }
+        .stat-value.info { color: #3b82f6; }
+        .stat-label { font-size: 12px; color: #666; text-transform: uppercase; margin-top: 5px; }
+        .env-table { width: 100%; }
+        .env-table tr td { padding: 10px 0; border-bottom: 1px solid #eee; }
+        .env-table tr td:first-child { font-weight: 600; color: #555; width: 40%; }
+        .env-table tr:last-child td { border-bottom: none; }
+        .progress-bar { height: 12px; background: #e5e7eb; border-radius: 6px; overflow: hidden; margin-top: 15px; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.5s; }
+        .progress-fill.has-failures { background: linear-gradient(90deg, #10b981 0%, #10b981 ${passRate}%, #ef4444 ${passRate}%, #ef4444 100%); }
+        .steps-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .steps-table th { background: #4472c4; color: white; padding: 12px 15px; text-align: left; font-weight: 600; font-size: 13px; text-transform: uppercase; }
+        .steps-table td { padding: 12px 15px; border-bottom: 1px solid #eee; font-size: 14px; }
+        .steps-table tr:hover { background: #f8f9fa; }
+        .steps-table .step-num { font-weight: bold; color: #4472c4; }
+        .steps-table .action { max-width: 300px; word-wrap: break-word; }
+        .steps-table .locator { max-width: 250px; word-wrap: break-word; font-family: monospace; font-size: 12px; color: #666; }
+        .steps-table .error { max-width: 200px; word-wrap: break-word; font-size: 12px; color: #ef4444; }
+        .status-badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
+        .status-badge.passed { background: #d1fae5; color: #065f46; }
+        .status-badge.failed { background: #fee2e2; color: #991b1b; }
+        .status-badge.skipped { background: #fef3c7; color: #92400e; }
+        .status-badge.info { background: #dbeafe; color: #1e40af; }
+        .time-col { font-size: 12px; color: #666; white-space: nowrap; }
+        .duration-col { font-weight: 600; color: #4472c4; }
+        .footer { text-align: center; padding: 20px; color: #999; font-size: 12px; }
+        .donut-chart { width: 150px; height: 150px; margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎭 E2E Playback Execution Report</h1>
+            <div class="subtitle">Automated Test Execution Results</div>
+            <div class="overall-status ${overallStatus.toLowerCase()}">${overallStatus}</div>
+        </div>
+
+        <div class="cards">
+            <div class="card">
+                <h2>📊 Test Results</h2>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value passed">${passedCount}</div>
+                        <div class="stat-label">✓ Passed</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value failed">${failedCount}</div>
+                        <div class="stat-label">✗ Failed</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value skipped">${skippedCount}</div>
+                        <div class="stat-label">⚠ Skipped</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value info">${infoCount}</div>
+                        <div class="stat-label">ℹ Info</div>
+                    </div>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill ${failedCount > 0 ? 'has-failures' : ''}" style="width: 100%"></div>
+                </div>
+                <div style="text-align: center; margin-top: 10px; font-size: 14px; color: #666;">
+                    Pass Rate: <strong style="color: ${failedCount === 0 ? '#10b981' : '#ef4444'}">${passRate}%</strong>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>⏱️ Timing Information</h2>
+                <table class="env-table">
+                    <tr><td>Execution Date</td><td>${executionStartTime.toLocaleDateString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</td></tr>
+                    <tr><td>Start Time</td><td>${executionStartTime.toLocaleTimeString('en-GB', { hour12: true })}</td></tr>
+                    <tr><td>End Time</td><td>${executionEndTime.toLocaleTimeString('en-GB', { hour12: true })}</td></tr>
+                    <tr><td>Total Duration</td><td><strong>${(totalDuration / 1000).toFixed(2)} seconds</strong></td></tr>
+                    <tr><td>Avg Step Duration</td><td>${(totalDuration / detailedResults.length / 1000).toFixed(2)} seconds</td></tr>
+                </table>
+            </div>
+
+            <div class="card">
+                <h2>🖥️ Environment</h2>
+                <table class="env-table">
+                    <tr><td>Test File</td><td style="word-break: break-all; font-size: 12px;">${excelPath}</td></tr>
+                    <tr><td>Platform</td><td>${process.platform}</td></tr>
+                    <tr><td>Node Version</td><td>${process.version}</td></tr>
+                    <tr><td>Architecture</td><td>${process.arch}</td></tr>
+                    <tr><td>Browser</td><td>Chromium (Playwright)</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📋 Step-wise Execution Details</h2>
+            <table class="steps-table">
+                <thead>
+                    <tr>
+                        <th>Step</th>
+                        <th>Action</th>
+                        <th>Locator</th>
+                        <th>Status</th>
+                        <th>Error</th>
+                        <th>Start</th>
+                        <th>End</th>
+                        <th>Duration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${detailedResults.map(r => `
+                    <tr>
+                        <td class="step-num">${r.stepNum}</td>
+                        <td class="action">${escapeHtml(r.action)}</td>
+                        <td class="locator">${escapeHtml(r.locator || '-')}</td>
+                        <td><span class="status-badge ${r.status.toLowerCase()}">${r.status}</span></td>
+                        <td class="error">${escapeHtml(r.errorMessage || '-')}</td>
+                        <td class="time-col">${new Date(r.startTime).toLocaleTimeString('en-GB')}</td>
+                        <td class="time-col">${new Date(r.endTime).toLocaleTimeString('en-GB')}</td>
+                        <td class="duration-col">${r.duration}ms</td>
+                    </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            Generated by E2E Playback Server • ${timestamp.toLocaleString('en-GB')}
+        </div>
+    </div>
+</body>
+</html>`;
+                fs.writeFileSync(reportPath, htmlReport);
+                console.error(`\n📊 Detailed HTML report saved: ${reportPath}`);
+                // Close browser after execution
+                try {
+                    if (context) {
+                        await context.close();
+                        context = null;
+                        page = null;
+                        console.error('✓ Browser closed after execution');
                     }
                 }
+                catch (closeError) {
+                    console.error('Note: Browser was already closed');
+                }
                 const summary = `\n${'='.repeat(60)}\nExecution Summary:\n${'='.repeat(60)}\n` +
-                    `Total Steps: ${successCount + failCount}\n` +
-                    `✓ Successful: ${successCount}\n` +
-                    `✗ Failed: ${failCount}\n` +
-                    `${'='.repeat(60)}\n`;
+                    `Total Steps: ${detailedResults.length}\n` +
+                    `✓ Passed: ${passedCount}\n` +
+                    `✗ Failed: ${failedCount}\n` +
+                    `⚠ Skipped: ${skippedCount}\n` +
+                    `ℹ Info: ${infoCount}\n` +
+                    `Duration: ${(totalDuration / 1000).toFixed(2)} seconds\n` +
+                    `${'='.repeat(60)}\n` +
+                    `\n📊 Detailed Report: ${reportPath}\n`;
                 return {
                     content: [
                         {

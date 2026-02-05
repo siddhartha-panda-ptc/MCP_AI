@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E2E Playback Execution Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f7fa; color: #333; line-height: 1.6; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3); }
+        .header h1 { font-size: 28px; margin-bottom: 5px; }
+        .header .subtitle { opacity: 0.9; font-size: 14px; }
+        .overall-status { display: inline-block; padding: 8px 20px; border-radius: 20px; font-weight: bold; font-size: 18px; margin-top: 15px; }
+        .overall-status.passed { background: #10b981; }
+        .overall-status.failed { background: #ef4444; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .card { background: white; border-radius: 12px; padding: 25px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+        .card h2 { font-size: 16px; color: #666; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .stat-item { text-align: center; padding: 15px; background: #f8f9fa; border-radius: 8px; }
+        .stat-value { font-size: 32px; font-weight: bold; }
+        .stat-value.passed { color: #10b981; }
+        .stat-value.failed { color: #ef4444; }
+        .stat-value.skipped { color: #f59e0b; }
+        .stat-value.info { color: #3b82f6; }
+        .stat-label { font-size: 12px; color: #666; text-transform: uppercase; margin-top: 5px; }
+        .env-table { width: 100%; }
+        .env-table tr td { padding: 10px 0; border-bottom: 1px solid #eee; }
+        .env-table tr td:first-child { font-weight: 600; color: #555; width: 40%; }
+        .env-table tr:last-child td { border-bottom: none; }
+        .progress-bar { height: 12px; background: #e5e7eb; border-radius: 6px; overflow: hidden; margin-top: 15px; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.5s; }
+        .progress-fill.has-failures { background: linear-gradient(90deg, #10b981 0%, #10b981 88.9%, #ef4444 88.9%, #ef4444 100%); }
+        .steps-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .steps-table th { background: #4472c4; color: white; padding: 12px 15px; text-align: left; font-weight: 600; font-size: 13px; text-transform: uppercase; }
+        .steps-table td { padding: 12px 15px; border-bottom: 1px solid #eee; font-size: 14px; }
+        .steps-table tr:hover { background: #f8f9fa; }
+        .steps-table .step-num { font-weight: bold; color: #4472c4; }
+        .steps-table .action { max-width: 300px; word-wrap: break-word; }
+        .steps-table .locator { max-width: 250px; word-wrap: break-word; font-family: monospace; font-size: 12px; color: #666; }
+        .steps-table .error { max-width: 200px; word-wrap: break-word; font-size: 12px; color: #ef4444; }
+        .status-badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
+        .status-badge.passed { background: #d1fae5; color: #065f46; }
+        .status-badge.failed { background: #fee2e2; color: #991b1b; }
+        .status-badge.skipped { background: #fef3c7; color: #92400e; }
+        .status-badge.info { background: #dbeafe; color: #1e40af; }
+        .time-col { font-size: 12px; color: #666; white-space: nowrap; }
+        .duration-col { font-weight: 600; color: #4472c4; }
+        .footer { text-align: center; padding: 20px; color: #999; font-size: 12px; }
+        .donut-chart { width: 150px; height: 150px; margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎭 E2E Playback Execution Report</h1>
+            <div class="subtitle">Automated Test Execution Results</div>
+            <div class="overall-status failed">FAILED</div>
+        </div>
+
+        <div class="cards">
+            <div class="card">
+                <h2>📊 Test Results</h2>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value passed">8</div>
+                        <div class="stat-label">✓ Passed</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value failed">1</div>
+                        <div class="stat-label">✗ Failed</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value skipped">0</div>
+                        <div class="stat-label">⚠ Skipped</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value info">1</div>
+                        <div class="stat-label">ℹ Info</div>
+                    </div>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill has-failures" style="width: 100%"></div>
+                </div>
+                <div style="text-align: center; margin-top: 10px; font-size: 14px; color: #666;">
+                    Pass Rate: <strong style="color: #ef4444">88.9%</strong>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>⏱️ Timing Information</h2>
+                <table class="env-table">
+                    <tr><td>Execution Date</td><td>Thursday 5 February 2026</td></tr>
+                    <tr><td>Start Time</td><td>2:05:05 pm</td></tr>
+                    <tr><td>End Time</td><td>2:05:41 pm</td></tr>
+                    <tr><td>Total Duration</td><td><strong>36.63 seconds</strong></td></tr>
+                    <tr><td>Avg Step Duration</td><td>3.66 seconds</td></tr>
+                </table>
+            </div>
+
+            <div class="card">
+                <h2>🖥️ Environment</h2>
+                <table class="env-table">
+                    <tr><td>Test File</td><td style="word-break: break-all; font-size: 12px;">C:\mcp\StepRecorder\TestSteps_05-02-26_12-34-23.xlsx</td></tr>
+                    <tr><td>Platform</td><td>win32</td></tr>
+                    <tr><td>Node Version</td><td>v20.17.0</td></tr>
+                    <tr><td>Architecture</td><td>x64</td></tr>
+                    <tr><td>Browser</td><td>Chromium (Playwright)</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📋 Step-wise Execution Details</h2>
+            <table class="steps-table">
+                <thead>
+                    <tr>
+                        <th>Step</th>
+                        <th>Action</th>
+                        <th>Locator</th>
+                        <th>Status</th>
+                        <th>Error</th>
+                        <th>Start</th>
+                        <th>End</th>
+                        <th>Duration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    
+                    <tr>
+                        <td class="step-num">1</td>
+                        <td class="action">Browser launched successfully</td>
+                        <td class="locator">-</td>
+                        <td><span class="status-badge info">Info</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:05</td>
+                        <td class="time-col">14:05:05</td>
+                        <td class="duration-col">512ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">2</td>
+                        <td class="action">Navigated to http://localhost:8080/cb/</td>
+                        <td class="locator">-</td>
+                        <td><span class="status-badge passed">Passed</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:05</td>
+                        <td class="time-col">14:05:06</td>
+                        <td class="duration-col">800ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">3</td>
+                        <td class="action">Clicked on &quot;element&quot;</td>
+                        <td class="locator">//*[@id=&quot;user&quot;]</td>
+                        <td><span class="status-badge passed">Passed</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:06</td>
+                        <td class="time-col">14:05:06</td>
+                        <td class="duration-col">564ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">4</td>
+                        <td class="action">Entered &quot;bond&quot; into user</td>
+                        <td class="locator">//*[@id=&quot;user&quot;]</td>
+                        <td><span class="status-badge passed">Passed</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:06</td>
+                        <td class="time-col">14:05:07</td>
+                        <td class="duration-col">516ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">5</td>
+                        <td class="action">Clicked on &quot;element&quot;</td>
+                        <td class="locator">//*[@id=&quot;password&quot;]</td>
+                        <td><span class="status-badge passed">Passed</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:07</td>
+                        <td class="time-col">14:05:08</td>
+                        <td class="duration-col">534ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">6</td>
+                        <td class="action">Entered &quot;007&quot; into password</td>
+                        <td class="locator">//*[@id=&quot;password&quot;]</td>
+                        <td><span class="status-badge passed">Passed</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:08</td>
+                        <td class="time-col">14:05:08</td>
+                        <td class="duration-col">516ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">7</td>
+                        <td class="action">Clicked on &quot;Login&quot;</td>
+                        <td class="locator">//input[@title=&quot;Login&quot;]</td>
+                        <td><span class="status-badge passed">Passed</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:08</td>
+                        <td class="time-col">14:05:09</td>
+                        <td class="duration-col">772ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">8</td>
+                        <td class="action">Clicked on &quot;Reports&quot;</td>
+                        <td class="locator">//a[text()=&quot;Reports&quot;]</td>
+                        <td><span class="status-badge passed">Passed</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:09</td>
+                        <td class="time-col">14:05:10</td>
+                        <td class="duration-col">730ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">9</td>
+                        <td class="action">Clicked on &quot;Review Hub&quot;</td>
+                        <td class="locator">//a[text()=&quot;Review Hub&quot;]</td>
+                        <td><span class="status-badge passed">Passed</span></td>
+                        <td class="error">-</td>
+                        <td class="time-col">14:05:10</td>
+                        <td class="time-col">14:05:11</td>
+                        <td class="duration-col">1664ms</td>
+                    </tr>
+                    
+                    <tr>
+                        <td class="step-num">10</td>
+                        <td class="action">New tab/window opened: http://localhost:8080/cb/errorHandler.spr?fileName=errorInRequest389.html#/reviewList</td>
+                        <td class="locator">-</td>
+                        <td><span class="status-badge failed">Failed</span></td>
+                        <td class="error">browserContext.waitForEvent: Timeout 30000ms exceeded while waiting for event &quot;page&quot;</td>
+                        <td class="time-col">14:05:11</td>
+                        <td class="time-col">14:05:41</td>
+                        <td class="duration-col">30020ms</td>
+                    </tr>
+                    
+                </tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            Generated by E2E Playback Server • 05/02/2026, 14:05:41
+        </div>
+    </div>
+</body>
+</html>
