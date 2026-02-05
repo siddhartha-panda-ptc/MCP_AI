@@ -845,7 +845,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const totalDuration = executionEndTime.getTime() - executionStartTime.getTime();
 
         // Save detailed HTML report to Results folder
-        const resultsDir = path.join('c:\\mcp', 'Results');
+        const resultsDir = path.join(process.cwd(), 'Results');
         if (!fs.existsSync(resultsDir)) {
           fs.mkdirSync(resultsDir, { recursive: true });
         }
@@ -861,7 +861,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Read logo image and convert to base64
         let logoBase64 = '';
-        const logoPath = path.join('c:\\mcp', 'assets', 'logo.png');
+        const logoPath = path.join(process.cwd(), 'assets', 'logo.png');
         try {
           if (fs.existsSync(logoPath)) {
             const logoBuffer = fs.readFileSync(logoPath);
@@ -888,7 +888,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f7fa; color: #333; line-height: 1.6; }
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3); }
+        .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3); }
         .header h1 { font-size: 28px; margin-bottom: 5px; }
         .header .subtitle { opacity: 0.9; font-size: 14px; }
         .overall-status { display: inline-block; padding: 8px 20px; border-radius: 20px; font-weight: bold; font-size: 18px; margin-top: 15px; }
@@ -903,7 +903,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         .stat-value.passed { color: #10b981; }
         .stat-value.failed { color: #ef4444; }
         .stat-value.skipped { color: #f59e0b; }
-        .stat-value.info { color: #3b82f6; }
+        .stat-value.info { color: #10b981; }
         .stat-label { font-size: 12px; color: #666; text-transform: uppercase; margin-top: 5px; }
         .env-table { width: 100%; }
         .env-table tr td { padding: 10px 0; border-bottom: 1px solid #eee; }
@@ -913,10 +913,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         .progress-fill { height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.5s; }
         .progress-fill.has-failures { background: linear-gradient(90deg, #10b981 0%, #10b981 ${passRate}%, #ef4444 ${passRate}%, #ef4444 100%); }
         .steps-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        .steps-table th { background: #4472c4; color: white; padding: 12px 15px; text-align: left; font-weight: 600; font-size: 13px; text-transform: uppercase; }
+        .steps-table th { background: #10b981; color: white; padding: 12px 15px; text-align: left; font-weight: 600; font-size: 13px; text-transform: uppercase; }
         .steps-table td { padding: 12px 15px; border-bottom: 1px solid #eee; font-size: 14px; }
         .steps-table tr:hover { background: #f8f9fa; }
-        .steps-table .step-num { font-weight: bold; color: #4472c4; }
+        .steps-table .step-num { font-weight: bold; color: #10b981; }
         .steps-table .action { max-width: 300px; word-wrap: break-word; }
         .steps-table .locator { max-width: 250px; word-wrap: break-word; font-family: monospace; font-size: 12px; color: #666; }
         .steps-table .error { max-width: 200px; word-wrap: break-word; font-size: 12px; color: #ef4444; }
@@ -924,9 +924,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         .status-badge.passed { background: #d1fae5; color: #065f46; }
         .status-badge.failed { background: #fee2e2; color: #991b1b; }
         .status-badge.skipped { background: #fef3c7; color: #92400e; }
-        .status-badge.info { background: #dbeafe; color: #1e40af; }
+        .status-badge.info { background: #d1fae5; color: #065f46; }
         .time-col { font-size: 12px; color: #666; white-space: nowrap; }
-        .duration-col { font-weight: 600; color: #4472c4; }
+        .duration-col { font-weight: 600; color: #10b981; }
         .footer { text-align: center; padding: 20px; color: #999; font-size: 12px; }
         .donut-chart { width: 150px; height: 150px; margin: 0 auto; }
         .header-content { display: flex; align-items: center; gap: 20px; }

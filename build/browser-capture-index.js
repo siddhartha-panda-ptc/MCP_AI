@@ -737,7 +737,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const executionEndTime = new Date();
                 const totalDuration = executionEndTime.getTime() - executionStartTime.getTime();
                 // Save detailed HTML report to Results folder
-                const resultsDir = path.join('c:\\mcp', 'Results');
+                const resultsDir = path.join(process.cwd(), 'Results');
                 if (!fs.existsSync(resultsDir)) {
                     fs.mkdirSync(resultsDir, { recursive: true });
                 }
@@ -750,7 +750,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const passedCount = detailedResults.filter(r => r.status === 'Passed').length;
                 // Read logo image and convert to base64
                 let logoBase64 = '';
-                const logoPath = path.join('c:\\mcp', 'assets', 'logo.png');
+                const logoPath = path.join(process.cwd(), 'assets', 'logo.png');
                 try {
                     if (fs.existsSync(logoPath)) {
                         const logoBuffer = fs.readFileSync(logoPath);
