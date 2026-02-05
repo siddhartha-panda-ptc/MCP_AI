@@ -417,6 +417,21 @@ async function launchBrowserWithCapture() {
         console.error("✓ Browser capture activated!");
         console.error("✓ All interactions will be recorded to: " + STEPS_FILE);
         console.error("\n👉 Use the browser - all your actions will be captured!\n");
+        // Monitor browser close event
+        context.on('close', () => {
+            console.error("\n" + "=".repeat(60));
+            console.error("Browser closed - Recording stopped");
+            console.error("=".repeat(60));
+            console.error("✓ All interactions saved to: " + STEPS_FILE);
+            console.error("Total steps recorded: " + recordedSteps.length);
+            console.error("=".repeat(60) + "\n");
+            // Clear the context and page references
+            page = null;
+            context = null;
+        });
+        page.on('close', () => {
+            console.error("Main page closed");
+        });
     }
     catch (error) {
         console.error("Error launching browser:", error);
@@ -473,6 +488,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                         description: "Optional: Path to Excel file with steps. If not provided, uses the latest captured steps file."
                     },
                 },
+            },
+        },
+        {
+            name: "record",
+            description: "Launch browser and start recording user interactions",
+            inputSchema: {
+                type: "object",
+                properties: {},
             },
         },
     ],
@@ -666,6 +689,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
         }
+        case "record": {
+            try {
+                if (context && page) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: "Browser is already running and recording interactions.\n\nUse the browser to perform actions - all interactions will be captured automatically.",
+                            },
+                        ],
+                    };
+                }
+                // Launch browser and start recording
+                await launchBrowserWithCapture();
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: "✓ Browser launched successfully!\n✓ Recording started\n\nAll your interactions will be captured automatically.\nSteps will be saved to: " + STEPS_FILE,
+                        },
+                    ],
+                };
+            }
+            catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: "Error launching browser: " + (error.message || String(error)),
+                        },
+                    ],
+                };
+            }
+        }
         default:
             throw new Error("Unknown tool: " + name);
     }
@@ -700,16 +757,19 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
     throw new Error("Unknown resource: " + uri);
 });
-// Start server and launch browser
+// Start server
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error("═══════════════════════════════════════════════════════");
-    console.error("  E2E Playback MCP - Auto Browser Capture Mode");
+    console.error("  E2E Playback MCP - On-Demand Recording Mode");
     console.error("═══════════════════════════════════════════════════════");
-    // Launch browser automatically
-    await launchBrowserWithCapture();
     console.error("\nMCP Server ready on stdio");
+    console.error("\nTo start recording, use the 'record' tool:");
+    console.error("  @mcp record");
+    console.error("\nTo execute recorded steps:");
+    console.error("  @mcp execute_steps");
+    console.error("");
 }
 // Cleanup on exit
 process.on('SIGINT', async () => {
