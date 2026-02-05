@@ -111,7 +111,6 @@ async function launchBrowserWithCapture() {
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--allow-running-insecure-content',
                 '--disable-infobars',
-                '--window-position=0,0',
                 '--ignore-certificate-errors',
                 '--ignore-certificate-errors-spki-list',
                 '--disable-extensions-except',
@@ -367,6 +366,46 @@ async function launchBrowserWithCapture() {
         await page.evaluate(trackerScript);
         // Also add as init script for future navigations
         await page.addInitScript(trackerScript);
+        // Listen for new pages/tabs being opened
+        context.on('page', async (newPage) => {
+            const url = newPage.url();
+            recordInteraction(`New tab/window opened: ${url || 'about:blank'}`, "", "New tab should open");
+            console.error(`✓ Captured new tab: ${url || 'about:blank'}`);
+            // Set up tracking on the new page
+            await newPage.waitForLoadState('domcontentloaded').catch(() => { });
+            await newPage.evaluate(trackerScript).catch(() => { });
+            // Set up console listener for the new page
+            newPage.on('console', async (msg) => {
+                const text = msg.text();
+                if (text === 'INPUT_TRACKER_LOADED') {
+                    console.error('✓ Input tracking loaded in new tab');
+                    return;
+                }
+                if (text.startsWith('INPUT_') || text.startsWith('BLUR_') || text.startsWith('CHANGE_') || text.startsWith('ENTER_') || text.startsWith('PROGRAMMATIC_')) {
+                    console.error('[DEBUG] New tab console:', text);
+                }
+                if (text.startsWith('INPUT_COMPLETE:')) {
+                    const parts = text.substring(15).split('|');
+                    const fieldName = parts[0] || 'input field';
+                    const value = parts[1] || '';
+                    const xpath = parts[2] || '';
+                    const key = fieldName + ':' + xpath;
+                    const lastRecorded = trackedInputs.get(key);
+                    if (value && value !== lastRecorded) {
+                        trackedInputs.set(key, value);
+                        recordInteraction(`Entered "${value}" into ${fieldName}`, xpath, `Field should contain "${value}"`);
+                        console.error(`✓ Captured input in new tab: "${value}" in ${fieldName}`);
+                    }
+                }
+                else if (text.startsWith('CLICK:')) {
+                    const parts = text.substring(6).split('|');
+                    const xpath = parts[2] || '';
+                    const elementText = parts[1] || 'element';
+                    recordInteraction(`Clicked on "${elementText}"`, xpath, `Element should be clickable`);
+                    console.error(`✓ Captured click in new tab: "${elementText}"`);
+                }
+            });
+        });
         // Wait a moment for tracker to confirm
         await page.waitForTimeout(500);
         if (trackerLoaded) {
@@ -385,7 +424,7 @@ async function launchBrowserWithCapture() {
 }
 // Create MCP server
 const server = new McpServer({
-    name: "step-recorder-with-browser",
+    name: "e2e-playback-with-browser",
     version: "1.0.0",
 }, {
     capabilities: {
@@ -504,7 +543,7 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error("═══════════════════════════════════════════════════════");
-    console.error("  Step Recorder MCP - Auto Browser Capture Mode");
+    console.error("  E2E Playback MCP - Auto Browser Capture Mode");
     console.error("═══════════════════════════════════════════════════════");
     // Launch browser automatically
     await launchBrowserWithCapture();

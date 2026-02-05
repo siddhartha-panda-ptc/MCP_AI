@@ -1,9 +1,9 @@
 {
-  "servers": {
-    "step-recorder": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["c:\\mcp\\build\\browser-capture-index.js"]
-    }
-  }
+	"servers": {
+		"e2e-playback": {
+			"command": "node",
+			"args": ["c:\\mcp\\build\\browser-capture-index.js"],
+			"env": {}
+		}
+	}
 }

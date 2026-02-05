@@ -1,6 +1,6 @@
 @echo off
 echo ================================================================
-echo   Step Recorder MCP - Auto Browser Capture
+echo   E2E Playback MCP - Auto Browser Capture
 echo ================================================================
 echo.
 echo Building project...

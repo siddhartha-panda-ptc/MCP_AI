@@ -1,10 +1,10 @@
 {
-  "name": "step-recorder-server",
+  "name": "e2e-playback-server",
   "version": "1.0.0",
   "description": "MCP server that records user steps and writes them in English",
   "type": "module",
   "bin": {
-    "step-recorder": "./build/browser-capture-index.js"
+    "e2e-playback": "./build/browser-capture-index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -12,7 +12,7 @@
   },
   "keywords": [
     "mcp",
-    "step-recorder"
+    "e2e-playback"
   ],
   "author": "",
   "license": "MIT",
