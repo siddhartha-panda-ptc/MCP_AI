@@ -151,187 +151,196 @@ async function launchBrowserWithCapture() {
             });
         });
         recordInteraction("Browser launched successfully", "", "Browser should open");
-        // Navigate to Google
-        await page.goto("http://google.com");
-        recordInteraction("Navigated to http://google.com", "", "Page should load successfully");
-        // Set up navigation listener
-        page.on('framenavigated', async (frame) => {
-            if (frame === page.mainFrame()) {
-                const url = frame.url();
-                if (!url.includes('about:blank') && !url.includes('google.com/')) {
-                    recordInteraction("Navigated to " + url, "", "Page should load successfully");
-                }
-            }
-        });
-        // Track input fields using blur events to capture complete text
+        // Track input fields - set up BEFORE navigation
         const trackedInputs = new Map();
-        // Inject blur event listeners to capture complete input values
-        await page.addInitScript(() => {
-            // Helper function to generate relative XPath
-            function getXPath(element) {
-                const el = element;
-                // Priority 1: Use ID if available
-                if (el.id) {
-                    return `//*[@id="${el.id}"]`;
-                }
-                // Priority 2: Use name attribute (common for inputs)
-                if (el.getAttribute('name')) {
-                    return `//${el.tagName.toLowerCase()}[@name="${el.getAttribute('name')}"]`;
-                }
-                // Priority 3: Use type and placeholder for inputs
-                if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
-                    const type = el.getAttribute('type');
-                    const placeholder = el.getAttribute('placeholder');
-                    const ariaLabel = el.getAttribute('aria-label');
-                    if (type && placeholder) {
-                        return `//${el.tagName.toLowerCase()}[@type="${type}" and @placeholder="${placeholder}"]`;
-                    }
-                    if (placeholder) {
-                        return `//${el.tagName.toLowerCase()}[@placeholder="${placeholder}"]`;
-                    }
-                    if (ariaLabel) {
-                        return `//${el.tagName.toLowerCase()}[@aria-label="${ariaLabel}"]`;
-                    }
-                    if (type) {
-                        return `//${el.tagName.toLowerCase()}[@type="${type}"]`;
-                    }
-                }
-                // Priority 4: Use class if available (first class only)
-                if (el.className && typeof el.className === 'string') {
-                    const firstClass = el.className.split(' ')[0];
-                    if (firstClass) {
-                        return `//${el.tagName.toLowerCase()}[@class="${firstClass}"]`;
-                    }
-                }
-                // Priority 5: Use tag with index
-                let ix = 1;
-                const siblings = element.parentNode?.children;
-                if (siblings) {
-                    for (let i = 0; i < siblings.length; i++) {
-                        const sibling = siblings[i];
-                        if (sibling === element) {
-                            return `//${el.tagName.toLowerCase()}[${ix}]`;
-                        }
-                        if (sibling.tagName === element.tagName) {
-                            ix++;
-                        }
-                    }
-                }
-                return `//${el.tagName.toLowerCase()}`;
+        let trackerLoaded = false;
+        // Define the tracker script as a function we can reuse
+        const trackerScript = `
+      console.log('INPUT_TRACKER_LOADED');
+      
+      // Override HTMLInputElement and HTMLTextAreaElement value setters to capture programmatic fills
+      const originalInputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      const originalInputValueGetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').get;
+      const originalTextAreaValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      const originalTextAreaValueGetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').get;
+      
+      Object.defineProperty(HTMLInputElement.prototype, 'value', {
+        set: function(newValue) {
+          const oldValue = originalInputValueGetter.call(this);
+          originalInputValueSetter.call(this, newValue);
+          if (oldValue !== newValue) {
+            const event = new Event('input', { bubbles: true, cancelable: true });
+            this.dispatchEvent(event);
+            console.log('PROGRAMMATIC_FILL_DETECTED: INPUT value changed to', newValue);
+          }
+        },
+        get: function() {
+          return originalInputValueGetter.call(this);
+        }
+      });
+      
+      Object.defineProperty(HTMLTextAreaElement.prototype, 'value', {
+        set: function(newValue) {
+          const oldValue = originalTextAreaValueGetter.call(this);
+          originalTextAreaValueSetter.call(this, newValue);
+          if (oldValue !== newValue) {
+            const event = new Event('input', { bubbles: true, cancelable: true });
+            this.dispatchEvent(event);
+            console.log('PROGRAMMATIC_FILL_DETECTED: TEXTAREA value changed to', newValue);
+          }
+        },
+        get: function() {
+          return originalTextAreaValueGetter.call(this);
+        }
+      });
+      
+      function getXPath(element) {
+        const el = element;
+        if (el.id) return "//*[@id=\\"" + el.id + "\\"]";
+        if (el.getAttribute('name')) return "//" + el.tagName.toLowerCase() + "[@name=\\"" + el.getAttribute('name') + "\\"]";
+        if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
+          const type = el.getAttribute('type');
+          const placeholder = el.getAttribute('placeholder');
+          const ariaLabel = el.getAttribute('aria-label');
+          if (type && placeholder) return "//" + el.tagName.toLowerCase() + "[@type=\\"" + type + "\\" and @placeholder=\\"" + placeholder + "\\"]";
+          if (placeholder) return "//" + el.tagName.toLowerCase() + "[@placeholder=\\"" + placeholder + "\\"]";
+          if (ariaLabel) return "//" + el.tagName.toLowerCase() + "[@aria-label=\\"" + ariaLabel + "\\"]";
+          if (type) return "//" + el.tagName.toLowerCase() + "[@type=\\"" + type + "\\"]";
+        }
+        if (el.className && typeof el.className === 'string') {
+          const firstClass = el.className.split(' ')[0];
+          if (firstClass) return "//" + el.tagName.toLowerCase() + "[@class=\\"" + firstClass + "\\"]";
+        }
+        let ix = 1;
+        const siblings = element.parentNode?.children;
+        if (siblings) {
+          for (let i = 0; i < siblings.length; i++) {
+            const sibling = siblings[i];
+            if (sibling === element) return "//" + el.tagName.toLowerCase() + "[" + ix + "]";
+            if (sibling.tagName === element.tagName) ix++;
+          }
+        }
+        return "//" + el.tagName.toLowerCase();
+      }
+
+      const recordedValues = new Map();
+
+      function logInputComplete(input, eventType) {
+        const value = input.value.trim();
+        const lastValue = recordedValues.get(input) || '';
+        if (value && value !== lastValue) {
+          const fieldName = input.name || input.id || input.placeholder || input.getAttribute('aria-label') || 'input field';
+          const xpath = getXPath(input);
+          console.log('INPUT_COMPLETE:' + fieldName + '|' + value + '|' + xpath);
+          recordedValues.set(input, value);
+        }
+      }
+
+      document.addEventListener('blur', (e) => {
+        const target = e.target;
+        const tagName = target?.tagName;
+        if (tagName === 'TEXTAREA' || tagName === 'INPUT') {
+          const input = target;
+          const type = (input.getAttribute('type') || 'text').toLowerCase();
+          const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
+          if (tagName === 'TEXTAREA' || !skipTypes.includes(type)) {
+            logInputComplete(input, 'blur');
+          }
+        }
+      }, true);
+
+      document.addEventListener('change', (e) => {
+        const target = e.target;
+        const tagName = target?.tagName;
+        if (tagName === 'TEXTAREA' || tagName === 'INPUT') {
+          const input = target;
+          const type = (input.getAttribute('type') || 'text').toLowerCase();
+          const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
+          if (tagName === 'TEXTAREA' || !skipTypes.includes(type)) {
+            logInputComplete(input, 'change');
+          }
+        }
+      }, true);
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const target = e.target;
+          const tagName = target?.tagName;
+          if (tagName === 'TEXTAREA' || tagName === 'INPUT') {
+            const input = target;
+            const type = (input.getAttribute('type') || 'text').toLowerCase();
+            const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
+            if (tagName === 'TEXTAREA' || !skipTypes.includes(type)) {
+              logInputComplete(input, 'enter');
             }
-            // Track initial values to detect changes
-            const initialValues = new Map();
-            const typingTimers = new Map();
-            // Listen for focus events to track initial values
-            document.addEventListener('focus', (e) => {
-                const target = e.target;
-                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-                    const input = target;
-                    const inputType = (input.getAttribute('type') || 'text').toLowerCase();
-                    // Skip non-text inputs
-                    const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
-                    if (!skipTypes.includes(inputType)) {
-                        // Only set initial value if not already set
-                        if (!initialValues.has(input)) {
-                            initialValues.set(input, input.value);
-                        }
-                    }
-                }
-            }, true);
-            // Function to record input value
-            function recordInputValue(input, immediate = false) {
-                // Ensure we have an initial value set
-                if (!initialValues.has(input)) {
-                    initialValues.set(input, '');
-                }
-                const currentValue = input.value.trim();
-                const initialValue = initialValues.get(input) || '';
-                // Clear any existing timer for this input
-                const existingTimer = typingTimers.get(input);
-                if (existingTimer) {
-                    clearTimeout(existingTimer);
-                    typingTimers.delete(input);
-                }
-                // Only record if value is not empty and changed from initial
-                if (currentValue && currentValue !== initialValue) {
-                    if (immediate) {
-                        const fieldName = input.name || input.id || input.placeholder || input.getAttribute('aria-label') || 'input field';
-                        const xpath = getXPath(input);
-                        console.log('INPUT_COMPLETE:' + fieldName + '|' + currentValue + '|' + xpath);
-                        initialValues.set(input, currentValue);
-                    }
-                    else {
-                        // Wait 1.5 seconds after last keystroke before recording
-                        const timer = window.setTimeout(() => {
-                            const finalValue = input.value.trim();
-                            const lastInitialValue = initialValues.get(input) || '';
-                            if (finalValue && finalValue !== lastInitialValue) {
-                                const fieldName = input.name || input.id || input.placeholder || input.getAttribute('aria-label') || 'input field';
-                                const xpath = getXPath(input);
-                                console.log('INPUT_COMPLETE:' + fieldName + '|' + finalValue + '|' + xpath);
-                                initialValues.set(input, finalValue);
-                            }
-                            typingTimers.delete(input);
-                        }, 1500);
-                        typingTimers.set(input, timer);
-                    }
-                }
-            }
-            // Listen for input events (typing) with debounce
-            document.addEventListener('input', (e) => {
-                const target = e.target;
-                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-                    const input = target;
-                    const inputType = (input.getAttribute('type') || 'text').toLowerCase();
-                    // Skip non-text inputs like checkbox, radio, file, etc.
-                    const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
-                    if (!skipTypes.includes(inputType)) {
-                        recordInputValue(input, false);
-                    }
-                }
-            }, true);
-            // Listen for blur events to capture complete values immediately
-            document.addEventListener('blur', (e) => {
-                const target = e.target;
-                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-                    const input = target;
-                    const inputType = (input.getAttribute('type') || 'text').toLowerCase();
-                    // Skip non-text inputs
-                    const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
-                    if (!skipTypes.includes(inputType)) {
-                        recordInputValue(input, true);
-                    }
-                }
-            }, true);
-            // Listen for Enter key to capture values immediately when submitting
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    const target = e.target;
-                    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-                        const input = target;
-                        const inputType = (input.getAttribute('type') || 'text').toLowerCase();
-                        // Skip non-text inputs
-                        const skipTypes = ['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden', 'range', 'color', 'date', 'datetime-local', 'month', 'time', 'week'];
-                        if (!skipTypes.includes(inputType)) {
-                            recordInputValue(input, true);
-                        }
-                    }
-                }
-            }, true);
-        });
-        // Track complete input values via console messages
+          }
+        }
+      }, true);
+
+      function getClickXPath(element) {
+        const el = element;
+        if (el.id) return "//*[@id=\\"" + el.id + "\\"]";
+        if (el.getAttribute('name')) return "//" + el.tagName.toLowerCase() + "[@name=\\"" + el.getAttribute('name') + "\\"]";
+        if (['button', 'a', 'label', 'span'].includes(el.tagName.toLowerCase())) {
+          const text = el.textContent?.trim();
+          if (text && text.length > 0 && text.length <= 30) return "//" + el.tagName.toLowerCase() + "[text()=\\"" + text + "\\"]";
+        }
+        if (el.getAttribute('aria-label')) return "//" + el.tagName.toLowerCase() + "[@aria-label=\\"" + el.getAttribute('aria-label') + "\\"]";
+        if (el.getAttribute('title')) return "//" + el.tagName.toLowerCase() + "[@title=\\"" + el.getAttribute('title') + "\\"]";
+        if (el.getAttribute('type')) return "//" + el.tagName.toLowerCase() + "[@type=\\"" + el.getAttribute('type') + "\\"]";
+        if (el.className && typeof el.className === 'string') {
+          const firstClass = el.className.split(' ')[0];
+          if (firstClass) return "//" + el.tagName.toLowerCase() + "[@class=\\"" + firstClass + "\\"]";
+        }
+        let ix = 1;
+        const siblings = element.parentNode?.children;
+        if (siblings) {
+          for (let i = 0; i < siblings.length; i++) {
+            const sibling = siblings[i];
+            if (sibling === element) return "//" + el.tagName.toLowerCase() + "[" + ix + "]";
+            if (sibling.tagName === element.tagName) ix++;
+          }
+        }
+        return "//" + el.tagName.toLowerCase();
+      }
+
+      document.addEventListener('click', (e) => {
+        const target = e.target;
+        const tagName = target.tagName.toLowerCase();
+        const text = target.textContent?.trim().substring(0, 50) || target.getAttribute('aria-label') || target.getAttribute('title') || '';
+        const xpath = getClickXPath(target);
+        const selector = tagName + (target.id ? '#' + target.id : '') + (target.className ? '.' + target.className.split(' ')[0] : '');
+        console.log('CLICK:' + selector + '|' + text + '|' + xpath);
+      }, true);
+    `;
+        // Set up console listener BEFORE navigation
         page.on('console', async (msg) => {
             const text = msg.text();
+            // Track when input tracker loads
+            if (text === 'INPUT_TRACKER_LOADED') {
+                trackerLoaded = true;
+                console.error('✓ Input tracking system loaded');
+                return;
+            }
+            // Debug: log all console messages to see what's happening
+            if (text.startsWith('INPUT_') || text.startsWith('BLUR_') || text.startsWith('CHANGE_') || text.startsWith('ENTER_') || text.startsWith('PROGRAMMATIC_')) {
+                console.error('[DEBUG] Console message:', text);
+            }
             if (text.startsWith('INPUT_COMPLETE:')) {
                 const parts = text.substring(15).split('|');
                 const fieldName = parts[0] || 'input field';
                 const value = parts[1] || '';
                 const xpath = parts[2] || '';
-                const key = fieldName + xpath;
-                // Only record if we haven't already recorded this exact value
-                if (trackedInputs.get(key) !== value) {
+                const key = fieldName + ':' + xpath;
+                // Always record if value is different from last recorded (allow multiple updates to same field)
+                const lastRecorded = trackedInputs.get(key);
+                if (value && value !== lastRecorded) {
                     trackedInputs.set(key, value);
                     recordInteraction(`Entered "${value}" into ${fieldName}`, xpath, `Field should contain "${value}"`);
+                    console.error(`✓ Captured input: "${value}" in ${fieldName}`);
+                }
+                else if (value) {
+                    console.error(`[SKIP] Duplicate value for ${fieldName}: "${value}"`);
                 }
             }
             else if (text.startsWith('CLICK:')) {
@@ -339,72 +348,33 @@ async function launchBrowserWithCapture() {
                 const xpath = parts[2] || '';
                 const elementText = parts[1] || 'element';
                 recordInteraction(`Clicked on "${elementText}"`, xpath, `Element should be clickable`);
+                console.error(`✓ Captured click: "${elementText}"`);
             }
         });
-        // Inject click tracking via console with XPath
-        await page.addInitScript(() => {
-            // Helper function to generate relative XPath
-            function getXPath(element) {
-                const el = element;
-                // Priority 1: Use ID if available
-                if (el.id) {
-                    return `//*[@id="${el.id}"]`;
+        // Set up navigation listener
+        page.on('framenavigated', async (frame) => {
+            if (frame === page.mainFrame()) {
+                const url = frame.url();
+                if (!url.includes('about:blank') && !url.includes('localhost:8080/cb/')) {
+                    recordInteraction("Navigated to " + url, "", "Page should load successfully");
                 }
-                // Priority 2: Use name attribute
-                if (el.getAttribute('name')) {
-                    return `//${el.tagName.toLowerCase()}[@name="${el.getAttribute('name')}"]`;
-                }
-                // Priority 3: Use text content for buttons, links, labels
-                if (['button', 'a', 'label', 'span'].includes(el.tagName.toLowerCase())) {
-                    const text = el.textContent?.trim();
-                    if (text && text.length > 0 && text.length <= 30) {
-                        return `//${el.tagName.toLowerCase()}[text()="${text}"]`;
-                    }
-                }
-                // Priority 4: Use aria-label
-                if (el.getAttribute('aria-label')) {
-                    return `//${el.tagName.toLowerCase()}[@aria-label="${el.getAttribute('aria-label')}"]`;
-                }
-                // Priority 5: Use title attribute
-                if (el.getAttribute('title')) {
-                    return `//${el.tagName.toLowerCase()}[@title="${el.getAttribute('title')}"]`;
-                }
-                // Priority 6: Use type attribute (for inputs, buttons)
-                if (el.getAttribute('type')) {
-                    return `//${el.tagName.toLowerCase()}[@type="${el.getAttribute('type')}"]`;
-                }
-                // Priority 7: Use class if available (first class only)
-                if (el.className && typeof el.className === 'string') {
-                    const firstClass = el.className.split(' ')[0];
-                    if (firstClass) {
-                        return `//${el.tagName.toLowerCase()}[@class="${firstClass}"]`;
-                    }
-                }
-                // Priority 8: Use tag with index
-                let ix = 1;
-                const siblings = element.parentNode?.children;
-                if (siblings) {
-                    for (let i = 0; i < siblings.length; i++) {
-                        const sibling = siblings[i];
-                        if (sibling === element) {
-                            return `//${el.tagName.toLowerCase()}[${ix}]`;
-                        }
-                        if (sibling.tagName === element.tagName) {
-                            ix++;
-                        }
-                    }
-                }
-                return `//${el.tagName.toLowerCase()}`;
             }
-            document.addEventListener('click', (e) => {
-                const target = e.target;
-                const tagName = target.tagName.toLowerCase();
-                const text = target.textContent?.trim().substring(0, 50) || target.getAttribute('aria-label') || target.getAttribute('title') || '';
-                const xpath = getXPath(target);
-                const selector = tagName + (target.id ? '#' + target.id : '') + (target.className ? '.' + target.className.split(' ')[0] : '');
-                console.log('CLICK:' + selector + '|' + text + '|' + xpath);
-            }, true);
         });
+        // Navigate to localhost
+        await page.goto("http://localhost:8080/cb/", { waitUntil: 'domcontentloaded' });
+        recordInteraction("Navigated to http://localhost:8080/cb/", "", "Page should load successfully");
+        // Inject tracker script into the current page immediately
+        await page.evaluate(trackerScript);
+        // Also add as init script for future navigations
+        await page.addInitScript(trackerScript);
+        // Wait a moment for tracker to confirm
+        await page.waitForTimeout(500);
+        if (trackerLoaded) {
+            console.error('✓ Ready to capture interactions');
+        }
+        else {
+            console.error('⚠ Warning: Input tracker may not have loaded');
+        }
         console.error("✓ Browser capture activated!");
         console.error("✓ All interactions will be recorded to: " + STEPS_FILE);
         console.error("\n👉 Use the browser - all your actions will be captured!\n");
